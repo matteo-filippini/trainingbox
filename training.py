@@ -1,5 +1,6 @@
 import tkinter as tk
-import time
+import time, os
+from datetime import datetime
 import csv
 import threading
 try:
@@ -9,10 +10,10 @@ except ImportError:
     RASPImode = 0
 
 # Configurazioni iniziali
-RESOLUTION = (800, 600)
-HB_POSITION = (200, 300)
-TARGET_POSITION = (600, 300)
-CIRCLE_DIAMETER = 100
+RESOLUTION = (800,480)
+HB_POSITION = (200, 240)
+TARGET_POSITION = (600, 240)
+CIRCLE_DIAMETER = 150
 
 
 
@@ -192,54 +193,108 @@ class TaskStateMachine:
 
 # Classe per salvare i dati in un thread separato
 class DataSaverThread(threading.Thread):
-    def __init__(self, file_name="experiment_data.csv"):
+    def __init__(self, save_dir="saves"):
         super().__init__()
-        self.file_name = file_name
-        self.data_queue = []
-        self.running = True 
-        self.lock = threading.Lock()
+        self.save_dir = save_dir  # Directory dove salvare i file
+        self.data_queue = []  # Coda per i dati da salvare
+        self.running = True  # Flag per far partire/fermare il thread
+        self.lock = threading.Lock()  # Lock per gestire l'accesso concorrente alla coda
+        self.last_id = self.get_last_id()  # Ottieni l'ID dell'ultimo file salvato
+        self.file_name = self.get_file_name()
         self.start()
 
+    def get_last_id(self):
+        """Restituisce l'ultimo ID usato, incrementato di uno per il prossimo file."""
+        files = os.listdir(self.save_dir)
+        file_ids = []
+        for file in files:
+            try:
+                # Estrai l'ID numerico dal nome del file
+                file_id = int(file.split('_')[0][2:])
+                file_ids.append(file_id)
+            except ValueError:
+                continue
+        
+        if not file_ids:
+            return 1  # Se non ci sono file, inizia da ID001
+        return max(file_ids) + 1  # Restituisce l'ID massimo +1
+
     def run(self):
-        with open(self.file_name, "a", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            while self.running:
-                if self.data_queue:
-                    with self.lock:
-                        data = self.data_queue.pop(0)
+        """Metodo per avviare il salvataggio dei dati in un file CSV."""
+        while self.running:
+            if self.data_queue:
+                with self.lock:
+                    data = self.data_queue.pop(0)
+                # Scrive i dati nel file CSV
+                with open(self.file_name, "a", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
                     writer.writerow(data)
                     csvfile.flush()
-                time.sleep(0.1)
-    
+            time.sleep(0.1)
+
     def stop(self):
+        """Ferma il thread di salvataggio dei dati."""
         self.running = False
 
     def save_data(self, data):
+        """Metodo per aggiungere i dati alla coda da salvare."""
         with self.lock:
             self.data_queue.append(data)
 
+    def get_file_name(self):
+        """Genera il nome del file con l'ID e la data corrente."""
+        new_id = self.last_id
+        self.last_id += 1
+        # Ottieni la data attuale in formato YYYY-MM-DD
+        current_date = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        file_name = f"{self.save_dir}/ID{new_id:03d}_{current_date}.csv"
+        return file_name
+
 
 class RewardGPIO(threading.Thread):
-    def __init__(self, gpio=18, mode=0):
+    def __init__(self, gpio=3, mode=0):
         super().__init__()
         self.GPIO_PIN = gpio
         self.mode = mode
+        self.pwm_freq = 50 # Frequenza PWM in Hz (questa è la velocità di rotazione!)
+        self.duty_cycle = 50  # Duty cycle in percentuale
+        self.pwm = []
+        
+
         if self.mode:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.GPIO_PIN, GPIO.OUT)
+            #self.pwm = GPIO.PWM(self.GPIO_PIN, self.pwm_freq) #PWM non riesco a farlo andare con i thread ;_;
 
-    def deliver(self, time=1):
+    def deliver(self, durata=1):
         if self.mode:
-            GPIO.output(self.GPIO_PIN, GPIO.HIGH)
-            time.sleep(time)
-            GPIO.output(self.GPIO_PIN, GPIO.LOW)
+            period = 1.0 / self.pwm_freq                    
+            time_on = period * (self.duty_cycle / 100.0)    
+            time_off = period * (1 - (self.duty_cycle / 100.0))  
+            end_time = time.time() + durata                 
+
+            while time.time() < end_time:
+                GPIO.output(self.GPIO_PIN, GPIO.HIGH)       
+                time.sleep(time_on)                         
+                GPIO.output(self.GPIO_PIN, GPIO.LOW)        
+                time.sleep(time_off)
+
         print('reward delivered')
 
 # Configura l'interfaccia grafica
 def main():
     # Numero di task disponibili
-    n_tasks = ['pigio bevo','delayed reach']  # Imposta il numero di task disponibili
-    task_id = [None]  # Lista per passare task_id tramite la funzione di callback
+    n_tasks = ['pigio bevo', 'delayed reach']  # Imposta il numero di task disponibili, da aggiungere qui quando si programmano
+    task_id = [None]  
+
+    # Funzione per monitorare lo stato del GPIO
+    def monitor_gpio(root): 
+        while True:
+            if GPIO.input(26) == GPIO.LOW:  
+                print("GPIO 26 è LOW: chiusura del programma")
+                root.destroy() 
+                break
+            time.sleep(0.1)  
 
     # Funzione per mostrare la finestra di selezione del task
     def show_task_selection():
@@ -270,20 +325,28 @@ def main():
     # Funzione per mostrare la finestra principale dopo la selezione del task
     def show_main_window():
         root = tk.Tk()
-        root.geometry(f"{RESOLUTION[0]}x{RESOLUTION[1]}")
+        root.attributes("-fullscreen", True)
         root.configure(bg="black")
 
-        canvas = tk.Canvas(root, width=RESOLUTION[0], height=RESOLUTION[1], bg="black")
-        canvas.pack()
+        canvas = tk.Canvas(root, bg="black")
+        canvas.pack(fill="both", expand=True)
 
         # Thread per salvare i dati
         saver_thread = DataSaverThread()
-        reward_thread = RewardGPIO(gpio=18, mode=RASPImode)
+        reward_thread = RewardGPIO(gpio=3, mode=RASPImode)
 
-        # Avvia la macchina a stati con il task selezionato
+        # Configurazione per la chiusura tramite bottone
+        if RASPImode:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP)  
+            gpio_thread = threading.Thread(target=monitor_gpio, args=(root,), daemon=True)
+            gpio_thread.start()
+
+        # Avvia controllo task con il task selezionato
         TaskStateMachine(task_id[0], canvas, saver_thread, reward_thread)
 
         root.mainloop()
+
         if RASPImode:
             GPIO.cleanup()
         saver_thread.stop()
