@@ -1,86 +1,89 @@
 import os
 import time
-import glob
-import gst
+import threading
+from picamera2 import Picamera2
+from picamera2.encoders import H264Encoder
 from datetime import datetime
 
-class VideoRecorder:
-    def __init__(self, save_folder, max_space_gb, max_file_size_mb=100):
-        self.save_folder = save_folder
-        self.max_space_gb = max_space_gb
-        self.max_file_size_mb = max_file_size_mb
-        self.current_file = None
-        self.current_file_size = 0
-        self.current_file_index = 0
-        self.video_pipeline = None
-        self._ensure_folder_exists()
 
-    def _ensure_folder_exists(self):
-        """Assicura che la cartella di salvataggio esista."""
-        if not os.path.exists(self.save_folder):
-            os.makedirs(self.save_folder)
+class VideoStreamRecorder(threading.Thread):
+    def __init__(self, max_space=1000, max_file_size=100, directory="videos", file_index=0):
+        """
+        Inizializza la classe per la registrazione video.
+        :param max_space: spazio massimo in MB da utilizzare (default 1000MB)
+        :param max_file_size: dimensione massima di ciascun file video in MB (default 100MB)
+        :param directory: cartella di destinazione per i file video
+        """
+        super().__init__()
+        self.max_space = max_space * 1024 * 1024  # Convertiamo in byte
+        self.max_file_size = max_file_size * 1024 * 1024  # Convertiamo in byte
+        self.directory = directory
+        self.running = False
+        self.picam2 = Picamera2()
+        self.video_config = self.picam2.create_video_configuration()
+        self.picam2.configure(self.video_config)
+        self.encoder = H264Encoder(10000000)
+        self.file_index = file_index
+        
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
-    def _get_available_space(self):
-        """Restituisce lo spazio disponibile sulla cartella in GB."""
-        total, used, free = os.statvfs(self.save_folder)
-        return free * total / (1024 ** 3)
-
-    def _get_video_filename(self):
-        """Genera un nome di file unico per ogni sessione video."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return os.path.join(self.save_folder, f"video_{timestamp}_{self.current_file_index}.mp4")
-
-    def _check_and_manage_space(self):
-        """Gestisce lo spazio, eliminando i file più vecchi se lo spazio è insufficiente."""
-        while self._get_available_space() < self.max_space_gb:
-            files = sorted(glob.glob(os.path.join(self.save_folder, "*.mp4")), key=os.path.getmtime)
-            if files:
-                os.remove(files[0])
-                print(f"File eliminato per fare spazio: {files[0]}")
-            else:
-                print("Non ci sono file da eliminare.")
-                break
-
-    def _initialize_pipeline(self):
-        """Inizializza la pipeline GStreamer per registrare il video."""
-        self.current_file = self._get_video_filename()
-        self.video_pipeline = gst.parse_launch(f"v4l2src ! videoconvert ! x264enc tune=zerolatency speed-preset=fast ! mp4mux ! filesink location={self.current_file}")
-        self.video_pipeline.set_state(gst.State.PLAYING)
-        self.current_file_size = 0
-
-    def start_recording(self):
-        """Inizia la registrazione e gestisce i file di salvataggio."""
-        self._initialize_pipeline()
-        print(f"Inizio registrazione in {self.current_file}")
-
-        while True:
-            # Controlla la dimensione del file e se è necessario passare a un nuovo file
-            self.current_file_size = os.path.getsize(self.current_file) / (1024 * 1024)  # In MB
-            if self.current_file_size >= self.max_file_size_mb:
-                print(f"File {self.current_file} ha raggiunto la dimensione massima di {self.max_file_size_mb}MB.")
-                self.current_file_index += 1
-                self._check_and_manage_space()  # Verifica lo spazio disponibile e elimina file se necessario
-                self._initialize_pipeline()  # Passa a un nuovo file di registrazione
-
-            time.sleep(1)
-
-    def stop_recording(self):
-        """Ferma la registrazione."""
-        if self.video_pipeline:
-            self.video_pipeline.set_state(gst.State.NULL)
-            print(f"Registrazione fermata. File salvato in {self.current_file}")
-        else:
-            print("Nessuna registrazione in corso.")
+        self.start()
 
 
+    def _cleanup_old_files(self):
+        """Cancella i file video più vecchi se lo spazio supera il limite massimo."""
+        files = files = sorted([f for f in os.listdir(self.directory) if f.endswith('.h264')], key=lambda f: os.path.getctime(os.path.join(self.directory, f)))
+        total_size = sum(os.path.getsize(os.path.join(self.directory, f)) for f in files if os.path.exists(os.path.join(self.directory, f)))
+
+        while total_size > self.max_space and files:
+            oldest_file = files.pop(0)
+            video_path = os.path.join(self.directory, oldest_file)
+            txt_path = f"{video_path}.txt"
+
+            os.remove(video_path)
+            os.remove(txt_path)
+            print('eliminato ' + str(video_path))
+
+            total_size = sum(os.path.getsize(os.path.join(self.directory, f)) for f in files if os.path.exists(os.path.join(self.directory, f)))
+
+
+
+    def run(self):
+        """Avvia la registrazione video continua."""
+        self.running = True
+        
+        while self.running:
+            # Genera il nome del file basato sulla data e ora
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            video_file = os.path.join(self.directory, f"{timestamp}_{self.file_index}.h264")
+            txt_file = f"{video_file}.txt"
+            
+            # Avvia la registrazione
+            self.picam2.start_recording(self.encoder, video_file, pts=txt_file)
+            
+            # Controlla la dimensione del file e ferma la registrazione se supera il limite
+            while os.path.getsize(video_file) < self.max_file_size and self.running:
+                time.sleep(1)
+            
+            # Ferma la registrazione e prepara per il prossimo file
+            self.picam2.stop_recording()
+            self._cleanup_old_files()
+
+
+    def stop(self):
+        """Ferma la registrazione e termina il thread."""
+        self.running = False
+
+
+# Esempio di utilizzo
 if __name__ == "__main__":
-    save_folder = "/videos"  # Sostituisci con il percorso della tua cartella di salvataggio
-    max_space_gb = 5  # 5 GB di spazio massimo
-    recorder = VideoRecorder(save_folder, max_space_gb)
+    recorder = VideoStreamRecorder(max_space=300, max_file_size=100)  # 500MB di spazio e 10MB per file
     
-    # Avvia la registrazione
-    recorder.start_recording()
-
-    # Per fermare la registrazione (per esempio, dopo 10 minuti)
-    time.sleep(600)  # Simula un tempo di registrazione di 10 minuti
-    recorder.stop_recording()
+    
+    # Registra per 30 secondi
+    time.sleep(30000)
+    
+    # Ferma la registrazione
+    recorder.stop()
+    recorder.join()

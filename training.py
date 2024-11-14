@@ -3,6 +3,7 @@ import time, os
 from datetime import datetime
 import csv
 import threading
+from testcamera import VideoStreamRecorder
 try:
     import RPi.GPIO as GPIO
     RASPImode = 1
@@ -10,11 +11,12 @@ except ImportError:
     RASPImode = 0
 
 # Configurazioni iniziali
-RESOLUTION = (800,480)
+RESOLUTION = (600,300) #(800,480)
 HB_POSITION = (200, 240)
 TARGET_POSITION = (600, 240)
 CIRCLE_DIAMETER = 150
-
+FULLSCREEN = 0
+SPEED = 500
 
 
 # Classe StateMachine per gestire i task
@@ -193,7 +195,7 @@ class TaskStateMachine:
 
 # Classe per salvare i dati in un thread separato
 class DataSaverThread(threading.Thread):
-    def __init__(self, save_dir="saves"):
+    def __init__(self, save_dir="/home/monkey/Desktop/trainingbox/saves"):
         super().__init__()
         self.save_dir = save_dir  # Directory dove salvare i file
         self.data_queue = []  # Coda per i dati da salvare
@@ -256,7 +258,7 @@ class RewardGPIO(threading.Thread):
         super().__init__()
         self.GPIO_PIN = gpio
         self.mode = mode
-        self.pwm_freq = 50 # Frequenza PWM in Hz (questa è la velocità di rotazione!)
+        self.pwm_freq = SPEED # Frequenza PWM in Hz (questa è la velocità di rotazione!)
         self.duty_cycle = 50  # Duty cycle in percentuale
         self.pwm = []
         
@@ -324,16 +326,20 @@ def main():
 
     # Funzione per mostrare la finestra principale dopo la selezione del task
     def show_main_window():
+        fullscreen = FULLSCREEN
         root = tk.Tk()
-        root.attributes("-fullscreen", True)
-        root.configure(bg="black")
-
-        canvas = tk.Canvas(root, bg="black")
-        canvas.pack(fill="both", expand=True)
+        if fullscreen:
+            root.attributes("-fullscreen", True)
+            canvas = tk.Canvas(root, bg="black")
+            canvas.pack(fill="both", expand=True)
+        else:
+            canvas = tk.Canvas(root, width=RESOLUTION[0], height=RESOLUTION[1], bg="black")
+            canvas.pack()
 
         # Thread per salvare i dati
         saver_thread = DataSaverThread()
         reward_thread = RewardGPIO(gpio=3, mode=RASPImode)
+        recorder = VideoStreamRecorder(directory='/home/monkey/Desktop/trainingbox/videos', file_index=saver_thread.last_id-1)
 
         # Configurazione per la chiusura tramite bottone
         if RASPImode:
@@ -350,6 +356,8 @@ def main():
         if RASPImode:
             GPIO.cleanup()
         saver_thread.stop()
+        recorder.stop()
+        recorder.join()
 
     # Mostra la finestra di selezione dei task all'inizio
     show_task_selection()
