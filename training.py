@@ -11,13 +11,15 @@ except ImportError:
     RASPImode = 0
 
 # Configurazioni iniziali
-RESOLUTION = (600,300) #(800,480)
-HB_POSITION = (200, 240)
-TARGET_POSITION = (600, 240)
-CIRCLE_DIAMETER = 150
-FULLSCREEN = 1
+RESOLUTION = (600,300) #se esugui windowed se no è fullscreen
+HB_POSITION = (200, 240) #in pixels
+TARGET_POSITION = (600, 240) #in pixels
+CIRCLE_DIAMETER = 150 #grandezza bottoni
+FULLSCREEN = 1 #1 fullscreen 0 o per vedere console
 MAXTRIAL = 100 #massimo numero trial
 SPEED = 500 #velocità chiocciola pellet
+VIDEODIR = '/home/monkey/Desktop/trainingbox/videos'
+MAXVIDEOSPACE = 6000 #massimo spazio utilizzato dai video poi inizia a cancellare (in MB) usa df -h
 
 
 # Classe StateMachine per gestire i task
@@ -343,7 +345,7 @@ def main():
         # Thread per salvare i dati
         saver_thread = DataSaverThread()
         reward_thread = RewardGPIO(gpio=3, mode=RASPImode)
-        recorder = VideoStreamRecorder(directory='/home/monkey/Desktop/trainingbox/videos', file_index=saver_thread.last_id-1)
+        recorder = VideoStreamRecorder(directory=VIDEODIR, max_space=MAXVIDEOSPACE, file_index=saver_thread.last_id-1)
 
         # Configurazione per la chiusura tramite bottone
         if RASPImode:
