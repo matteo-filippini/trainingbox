@@ -15,16 +15,18 @@ RESOLUTION = (600,300) #(800,480)
 HB_POSITION = (200, 240)
 TARGET_POSITION = (600, 240)
 CIRCLE_DIAMETER = 150
-FULLSCREEN = 0
-SPEED = 500
+FULLSCREEN = 1
+MAXTRIAL = 100 #massimo numero trial
+SPEED = 500 #velocità chiocciola pellet
 
 
 # Classe StateMachine per gestire i task
 class TaskStateMachine:
-    def __init__(self, task_id, canvas, saver_thread, reward_thread):
+    def __init__(self, task_id, canvas, saver_thread, reward_thread, root, maxtrial = 100):
         self.task_id = task_id
         self.state = 0
         self.trial = 1
+        self.maxtrial = maxtrial
         self.canvas = canvas
         self.saver_thread = saver_thread
         self.reward_thread = reward_thread
@@ -33,6 +35,7 @@ class TaskStateMachine:
         self.stateHB = 0  # Stato di pressione per HB: 1 se premuto, 0 se rilasciato
         self.stateTB = 0  # Stato di pressione per TARGET: 1 se premuto, 0 se rilasciato
         self.last_time = time.time()
+        self.root = root
         
         # Associa gli eventi di pressione e rilascio a entrambi i cerchi
         self.canvas.tag_bind("HB_button", "<ButtonPress-1>", self.on_click_press)
@@ -163,7 +166,8 @@ class TaskStateMachine:
                 if (self.stateHB == 0 & self.stateTB == 0):
                     self.state = 0 
 
-
+        if self.trial >= self.maxtrial:
+            self.root.destroy()
         self.canvas.after(1, self.update_state)
 
 
@@ -349,7 +353,7 @@ def main():
             gpio_thread.start()
 
         # Avvia controllo task con il task selezionato
-        TaskStateMachine(task_id[0], canvas, saver_thread, reward_thread)
+        TaskStateMachine(task_id[0], canvas, saver_thread, reward_thread, root, maxtrial = MAXTRIAL)
 
         root.mainloop()
 

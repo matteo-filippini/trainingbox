@@ -20,7 +20,7 @@ class VideoStreamRecorder(threading.Thread):
         self.directory = directory
         self.running = False
         self.picam2 = Picamera2()
-        self.video_config = self.picam2.create_video_configuration()
+        self.video_config = self.picam2.create_video_configuration({"size":(1280, 720)})
         self.picam2.configure(self.video_config)
         self.encoder = H264Encoder(10000000)
         self.file_index = file_index
